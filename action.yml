@@ -65,7 +65,7 @@ runs:
         mkdir -p ~/.local/bin
         cat > ~/.local/bin/hurd << EOL
         #!/usr/bin/env sh
-        ssh debian@hurd sh -l \$1
+        ssh debian@hurd sh -l <\$1
         EOL
         chmod +x ~/.local/bin/hurd
 
