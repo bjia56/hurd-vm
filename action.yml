@@ -1,0 +1,98 @@
+name: GNU Hurd VM
+description: Action to execute commands within a GNU Hurd VM running on QEMU
+author: Brett Jia
+
+inputs:
+  run:
+    description: Commands to run in the VM
+    required: true
+    default: uname -a
+
+runs:
+  using: composite
+  steps:
+    - name: Install dependencies
+      shell: bash
+      run: |
+        # Install dependencies
+        sudo apt-get update -qq > /dev/null
+        sudo apt-get install -y -qq qemu-system-x86 xvfb ssh wget > /dev/null
+        qemu-system-x86_64 --version
+
+    - name: Download disk image and keys
+      shell: bash
+      run: |
+        # Download disk image and keys
+        TAG=debian-hurd-0
+
+        wget -q https://github.com/bjia56/hurd-vm/releases/download/$TAG/hurd.img.xz
+        xz -d hurd.img.xz
+
+        mkdir -p /tmp/hurd.ssh
+        chmod 700 /tmp/hurd.ssh
+        wget -q -O /tmp/hurd.ssh/id_rsa https://github.com/bjia56/hurd-vm/releases/download/$TAG/id_rsa
+        chmod 400 /tmp/hurd.ssh/id_rsa
+        wget -q -O /tmp/hurd.ssh/id_rsa.pub https://github.com/bjia56/hurd-vm/releases/download/$TAG/id_rsa.pub
+        chmod 644 /tmp/hurd.ssh/id_rsa.pub
+
+    - name: Boot VM
+      shell: bash
+      run: |
+        # Boot VM
+        export XDG_RUNTIME_DIR=$(mktemp -d)
+        xvfb-run sudo qemu-system-x86_64 -M q35 -enable-kvm -m 4G -drive file=hurd.img,cache=writeback -no-reboot -device e1000,netdev=net0 -netdev user,id=net0,hostfwd=tcp::5555-:22 &
+
+    - name: Setup ssh
+      shell: bash
+      run: |
+        # Setup ssh
+        mkdir -p ~/.ssh
+        chmod 700 ~/.ssh
+        cat > ~/.ssh/config <<EOL
+        Host hurd
+            User debian
+            HostName localhost
+            Port 5555
+            IdentityFile /tmp/hurd.ssh/id_rsa
+            StrictHostKeyChecking no
+        EOL
+        chmod 600 ~/.ssh/config
+
+    - name: Install custom shell
+      shell: bash
+      run: |
+        # Install custom shell
+        mkdir -p ~/.local/bin
+        cat > ~/.local/bin/hurd << EOL
+        #!/usr/bin/env sh
+        ssh debian@hurd sh -l \$1
+        EOL
+        chmod +x ~/.local/bin/hurd
+
+    - name: Wait for VM
+      shell: bash
+      run: |
+        # Wait for VM
+        wait_for_ssh() {
+          local HOST="hurd"
+          local INTERVAL=10
+          while true; do
+            if ! ssh -o ConnectTimeout=5 "debian@$HOST" date &> /dev/null ; then
+              echo "Waiting for SSH to become available for debian@$HOST"
+              sleep $INTERVAL
+            else
+              echo "SSH is now available on $HOST."
+              return 0
+            fi
+          done
+        }
+        wait_for_ssh
+
+    - name: Run commands
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        # Run commands
+        cat <<- "hurdSCRIPT" | ssh debian@hurd sh
+        ${{ inputs.run }}
+        hurdSCRIPT
